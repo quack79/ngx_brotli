@@ -1,84 +1,89 @@
 #!/bin/bash
 
-# https://www.majlovesreg.one/tag/code/
-# https://www.majlovesreg.one/adding-brotli-to-a-built-nginx-instance
 # https://github.com/majal/maj-server/tree/master/nginx-modules-brotli
+# https://devopsan.com/how-to-install-auto-upgrade-nginx-brotli-module-on-ubuntu/
 
-# Install needed development packages if not yet installed in the system
+# Can be run in post-upgrade by creating "/etc/apt/apt.conf.d/100-nginx-post-update"
+# DPkg::Post-Invoke {"/home/user/mkbrotli"; };
+
+# Modified and updated to work with newest Brotli versions, and only runs if NGINX has been updated
+
+# Required dependencies
 # sudo apt -y install git libpcre3 libpcre3-dev zlib1g zlib1g-dev openssl libssl-dev
 
-# For predefined NGINX version, use:
-# ngver=1.17.1
+ngx_brotli() {
+    trap 'printf "Aborted by user. exiting...\n";exit' INT
 
-# For passing the version via the command line (i.e.: user@server:~$ ./mkbrotli 1.17.1), use:
-ngver=$1
+    ngx_brotli_upgrade() {
 
-# For automated detection of currently installed NGINX version (not to be used for auto-updating, see hooks in post), use:
-# ngver=$(nginx -v 2>&1 | grep -o '[0-9\.]*')
+        # For automated detection of currently installed NGINX version:
+        ngver=$(nginx -v 2>&1 | grep -o '[0-9\.]*')
 
-[ "${ngver}" ] || { echo "Please supply NGINX version. Exiting..."; exit 7; }
+        # Automatically select NGINX modules directory:
+        [ -d /usr/share/nginx/modules ] && moddir=/usr/share/nginx/modules
+        [ -d $(nginx -V 2>&1 | grep -o 'prefix=[^ ]*' | sed 's/prefix=//')/modules ] && moddir="$(nginx -V 2>&1 | grep -o 'prefix=[^ ]*' | sed 's/prefix=//')/modules"
+        [ -d $(nginx -V 2>&1 | grep -o 'modules-path=[^ ]*' | sed 's/modules-path=//') ] && moddir="$(nginx -V 2>&1 | grep -o 'modules-path=[^ ]*' | sed 's/modules-path=//')"
+        [ "${moddir}" ] || { echo '!! missing modules directory, exiting...'; exit 1; }
 
-# Get configure parameters of installed NGINX. Not needed if NGINX was configured '--with-compat'.
-# Uncomment one of the lines below if the script sucessfully builds modules but NGINX throws a "not binary compatible" error.
-# confparams=$(nginx -V 2>&1 | grep -o -- '--prefix='.*)
-# confparams=$(nginx -V 2>&1 | grep -o -- '--[^with]'.*)
-# confparams=$(nginx -V 2>&1 | grep -- '--' | sed "s/.*' //")
-# confparams=$(nginx -V 2>&1 | grep -o -- "--prefix='.*'$")
+        # Set temporary directory and build on it
+        builddir="$(mktemp -d)"
+        cd "${builddir}"
 
-# To automatically select NGINX modules directory:
-[ -d /usr/share/nginx/modules ] && moddir=/usr/share/nginx/modules
-[ -d $(nginx -V 2>&1 | grep -o 'prefix=[^ ]*' | sed 's/prefix=//')/modules ] && moddir="$(nginx -V 2>&1 | grep -o 'prefix=[^ ]*' | sed 's/prefix=//')/modules"
-[ -d $(nginx -V 2>&1 | grep -o 'modules-path=[^ ]*' | sed 's/modules-path=//') ] && moddir="$(nginx -V 2>&1 | grep -o 'modules-path=[^ ]*' | sed 's/modules-path=//')"
+        echo
+        echo '################################################################################'
+        echo
+        echo "Building Brotli for NGINX ${ngver}"
+        echo "Temporary build directory: ${builddir}"
+        echo "Modules directory: ${moddir}"
+        echo
 
-# To manually set NGINX modules directory:
-# moddir=/path/to/modules/directory
-[ "${moddir}" ] || { echo '!! missing modules directory, exiting...'; exit 1; }
+        # Download and unpack NGINX
+        wget https://nginx.org/download/nginx-${ngver}.tar.gz && { tar zxf nginx-${ngver}.tar.gz && rm nginx-${ngver}.tar.gz; } || { echo 'Download failed, exiting...'; exit 2; }
 
-# Set temporary directory and build on it
-builddir="$(mktemp -d)"
-cd "${builddir}"
+        # Download, initialize, and make Brotli dynamic modules
+        git clone --recurse-submodules -j8 https://github.com/google/ngx_brotli
+        cd ngx_brotli/deps/brotli
+        mkdir out && cd out
+        cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_C_FLAGS="-Ofast -m64 -march=native -mtune=native -flto -funroll-loops -ffunction-sections -fdata-sections -Wl,--gc-sections" -DCMAKE_CXX_FLAGS=>cmake --build . --config Release --target brotlienc
+        cd ../../../..
+        cd nginx-${ngver}
+        [ "${confparams}" ] && nice -n 19 ionice -c 3 ./configure --add-dynamic-module=../ngx_brotli "${confparams}" || nice -n 19 ionice -c 3 ./configure --with-compat --add-dynamic-module=../ngx_brotli
+        nice -n 19 ionice -c 3 make modules || { echo 'Configure or make failed, exiting...'; exit 4; }
 
-echo
-echo '################################################################################'
-echo
-echo "Building Brotli for NGINX ${ngver}"
-echo "Temporary build directory: ${builddir}"
-echo "Modules directory: ${moddir}"
-echo
+        # Replace Brotli in modules directory
+        [ -f "${moddir}/ngx_http_brotli_filter_module.so" ] && sudo mv "${moddir}/ngx_http_brotli_filter_module.so" "${moddir}/ngx_http_brotli_filter_module.so.old"
+        [ -f "${moddir}/ngx_http_brotli_static_module.so" ] && sudo mv "${moddir}/ngx_http_brotli_static_module.so" "${moddir}/ngx_http_brotli_static_module.so.old"
+        sudo cp objs/*.so "${moddir}/"
+        sudo chmod 644 "${moddir}/ngx_http_brotli_filter_module.so" || { echo 'Module permissions failed, exiting...'; exit 5; }
+        sudo chmod 644 "${moddir}/ngx_http_brotli_static_module.so" || { echo 'Module permissions failed, exiting...'; exit 6; }
 
-# Download and unpack NGINX
-wget https://nginx.org/download/nginx-${ngver}.tar.gz && { tar zxf nginx-${ngver}.tar.gz && rm nginx-${ngver}.tar.gz; } || { echo '!! download failed, exiting...'; exit 2; }
+        # Clean up build files
+        cd "${builddir}/.."
+        sudo rm -r "${builddir}/ngx_brotli"
+        rm -r "${builddir}"
 
-# Download, initialize, and make Brotli dynamic modules
-git clone https://github.com/google/ngx_brotli.git
-cd ngx_brotli && git submodule update --init && cd ../nginx-${ngver}
-[ "${confparams}" ] && nice -n 19 ionice -c 3 "./configure --add-dynamic-module=../ngx_brotli ${confparams}" || nice -n 19 ionice -c 3 ./configure --with-compat --add-dynamic-module=../ngx_brotli
-nice -n 19 ionice -c 3 make modules || { echo '!! configure or make failed, exiting...'; exit 4; }
+        echo
+        echo "Sucessfully built and installed latest Brotli for NGINX ${ngver}"
+        echo "Modules can be found in ${moddir}"
+        echo
+        echo '################################################################################'
+        echo
+    }
 
-# Replace Brotli in modules directory
-[ -f "${moddir}/ngx_http_brotli_filter_module.so" ] && sudo mv "${moddir}/ngx_http_brotli_filter_module.so" "${moddir}/ngx_http_brotli_filter_module.so.old"
-[ -f "${moddir}/ngx_http_brotli_static_module.so" ] && sudo mv "${moddir}/ngx_http_brotli_static_module.so" "${moddir}/ngx_http_brotli_static_module.so.old"
-sudo cp objs/*.so "${moddir}/"
-sudo chmod 644 "${moddir}/ngx_http_brotli_filter_module.so" || { echo '!! module permissions failed, exiting...'; exit 5; }
-sudo chmod 644 "${moddir}/ngx_http_brotli_static_module.so" || { echo '!! module permissions failed, exiting...'; exit 6; }
+    # Pass init argument if you want to install Brotli for the first time
+    if [ "" == "init" ]; then
+        ngx_brotli_upgrade && return 0
+    fi
 
-# Clean up build files
-cd "${builddir}/.."
-sudo rm -r "${builddir}/ngx_brotli"
-rm -r "${builddir}"
+    if nginx -t 2>&1 | grep -q brotli; then
+        printf "Upgrading ngx_brotli...\n"
+        ngx_brotli_upgrade && sudo service nginx restart
+        systemctl --no-pager status nginx
+    else
+        echo '#################################'
+        printf "ngx_brotli is already up to date\n"
+        echo '#################################'
+    fi
+}
 
-echo
-echo "Sucessfully built and installed latest Brotli for NGINX ${ngver}"
-echo "Modules can be found in ${moddir}"
-echo "Next step: Configure dynamic modules and reload/restart NGINX."
-echo
-echo '################################################################################'
-echo
-
-# Start/restart NGINX.
-# Not recommended if script is hooked since NGINX is automatically restarted by the package manager (e.g. apt) after an upgrade.
-# Restarting NGINX before the upgrade could cause a module version mismatch.
-# sudo nginx -t && { systemctl is-active nginx && sudo systemctl restart nginx || sudo systemctl start nginx; } || true
-# echo
-# systemctl --no-pager status nginx
-# echo
+return 2>/dev/null || ngx_brotli "${@}"
