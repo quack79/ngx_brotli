@@ -1,4 +1,12 @@
-# Can be run in post-upgrade by creating "/etc/apt/apt.conf.d/100-nginx-post-update"
-> DPkg::Post-Invoke {"/home/user/mkbrotli"; };
+## Are you running NGINX and want to add Brotli compression? 
 
-# Modified and updated to work with newest Brotli versions, and only runs if NGINX has been updated
+With this script, that has been modified and updated to work with latest Brotli versions, you can make dynamic Brotli modules which upgrade whenever NGINX does.
+
+
+To run mkbrotli in post-upgrade:
+
+`nano /etc/apt/apt.conf.d/100-nginx-post-upgrade`
+
+And paste in the following:
+
+> DPkg::Post-Invoke {"/home/user/mkbrotli"; };
