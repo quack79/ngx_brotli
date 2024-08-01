@@ -44,11 +44,14 @@ ngx_brotli() {
         git clone --recurse-submodules -j8 https://github.com/google/ngx_brotli
         cd ngx_brotli/deps/brotli
         mkdir out && cd out
-        cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_C_FLAGS="-Ofast -m64 -march=native -mtune=native -flto -funroll-loops -ffunction-sections -fdata-sections -Wl,--gc-sections" -DCMAKE_CXX_FLAGS=>cmake --build . --config Release --target brotlienc
+        cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_C_FLAGS="-Ofast -m64 -march=native -mtune=native -flto -funroll-loops -ffunction-sections -fdata-sections -Wl,--gc-sections" -DCMAKE_CXX_FLAGS="-Ofast -m64 -march=native -mtune=native -flto -funroll-loops -ffunction-sections -fdata-sections -Wl,--gc-sections" -DCMAKE_INSTALL_PREFIX=./installed ..
+        cmake --build . --config Release --target brotlienc
         cd ../../../..
         cd nginx-${ngver}
-        [ "${confparams}" ] && nice -n 19 ionice -c 3 ./configure --add-dynamic-module=../ngx_brotli "${confparams}" || nice -n 19 ionice -c 3 ./configure --with-compat --add-dynamic-module=../ngx_brotli
-        nice -n 19 ionice -c 3 make modules || { echo 'Configure or make failed, exiting...'; exit 4; }
+        export CFLAGS="-m64 -march=native -mtune=native -Ofast -flto -funroll-loops -ffunction-sections -fdata-sections -Wl,--gc-sections"
+        export LDFLAGS="-m64 -Wl,-s -Wl,-Bsymbolic -Wl,--gc-sections"
+        ./configure --add-module=../ngx_brotli
+        make && make install
 
         # Replace Brotli in modules directory
         [ -f "${moddir}/ngx_http_brotli_filter_module.so" ] && sudo mv "${moddir}/ngx_http_brotli_filter_module.so" "${moddir}/ngx_http_brotli_filter_module.so.old"
