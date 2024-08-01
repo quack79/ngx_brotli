@@ -44,14 +44,13 @@ ngx_brotli() {
         git clone --recurse-submodules -j8 https://github.com/google/ngx_brotli
         cd ngx_brotli/deps/brotli
         mkdir out && cd out
-        cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_C_FLAGS="-Ofast -m64 -march=native -mtune=native -flto -funroll-loops -ffunction-sections -fdata-sections -Wl,--gc-sections" -DCMAKE_CXX_FLAGS="-Ofast -m64 -march=native -mtune=native -flto -funroll-loops -ffunction-sections -fdata-sections -Wl,--gc-sections" -DCMAKE_INSTALL_PREFIX=./installed ..
+        cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_C_FLAGS="-Ofast -m64 -march=native -mtune=native -flto -funroll-loops -ffunction-sections -fdata-sections -Wl,--gc-sections" -DCMAKE_INSTALL_PREFIX=./installed ..
         cmake --build . --config Release --target brotlienc
         cd ../../../..
+
         cd nginx-${ngver}
-        export CFLAGS="-m64 -march=native -mtune=native -Ofast -flto -funroll-loops -ffunction-sections -fdata-sections -Wl,--gc-sections"
-        export LDFLAGS="-m64 -Wl,-s -Wl,-Bsymbolic -Wl,--gc-sections"
-        ./configure --add-module=../ngx_brotli
-        make && make install
+        ./configure --with-compat --add-dynamic-module=../ngx_brotli
+        make modules
 
         # Replace Brotli in modules directory
         [ -f "${moddir}/ngx_http_brotli_filter_module.so" ] && sudo mv "${moddir}/ngx_http_brotli_filter_module.so" "${moddir}/ngx_http_brotli_filter_module.so.old"
